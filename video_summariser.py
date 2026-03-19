@@ -1,86 +1,107 @@
-import validators
 import streamlit as st
-from langchain_core.prompts import PromptTemplate
-from langchain_groq import ChatGroq
-from langchain_community.document_loaders import UnstructuredURLLoader
-from langchain_core.documents import Document
-from youtube_transcript_api import YouTubeTranscriptApi
+import validators
 import re
 
-st.set_page_config(page_title="LangChain: Summarize Text from YT or Website")
-st.title("🦜 LangChain: Summarize Text From YT or Website")
-st.subheader("Summarise URL")
+from langchain_core.prompts import PromptTemplate
+from langchain_groq import ChatGroq
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from youtube_transcript_api import YouTubeTranscriptApi
+
+# ---------------- UI ----------------
+st.set_page_config(page_title="AI Summarizer", layout="centered")
+st.title("🚀 AI Summarizer (Fast + Production Ready)")
+st.write("Summarize YouTube videos or Web pages instantly")
 
 with st.sidebar:
-    groq_api_key = st.text_input("Groq API Key", value="", type="password")
+    groq_api_key = st.text_input("🔑 Groq API Key", type="password")
 
-generic_url = st.text_input("URL", label_visibility="collapsed")
+url = st.text_input("Enter URL (YouTube or Website)")
 
-prompt_template = """
-Provide a summary of the following content in 300 words:
-Content: {text}
-"""
-prompt = PromptTemplate.from_template(prompt_template)
+# ---------------- Prompt ----------------
+prompt = PromptTemplate.from_template(
+    "Summarize the following content in 200–300 words:\n\n{text}"
+)
 
-
+# ---------------- Utils ----------------
 def extract_video_id(url):
-    patterns = [
-        r"(?:v=|\/)([0-9A-Za-z_-]{11}).*",
-        r"(?:youtu\.be\/)([0-9A-Za-z_-]{11})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
+    match = re.search(r"(?:v=|youtu\.be/)([0-9A-Za-z_-]{11})", url)
+    return match.group(1) if match else None
 
 
-def get_youtube_transcript(url):
+@st.cache_data(show_spinner=False)
+def load_youtube_data(url):
     video_id = extract_video_id(url)
-    if not video_id:
-        raise ValueError("Invalid YouTube URL")
-
     transcript = YouTubeTranscriptApi.get_transcript(video_id)
-    text = " ".join([entry["text"] for entry in transcript])
-
+    text = " ".join([t["text"] for t in transcript])
     return [Document(page_content=text)]
 
 
-def summarize_docs(llm, docs):
-    full_text = " ".join([doc.page_content for doc in docs])
-    chain = prompt | llm
-    response = chain.invoke({"text": full_text})
-    return response.content
+@st.cache_data(show_spinner=False)
+def load_web_data(url):
+    loader = WebBaseLoader(url)
+    return loader.load()
 
 
-if st.button("Summarise the content from YT or Website"):
-    if not groq_api_key.strip() or not generic_url.strip():
-        st.error("Please provide the information to get started")
+def split_docs(docs):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=150
+    )
+    return splitter.split_documents(docs)
 
-    elif not validators.url(generic_url):
-        st.error("Please enter a valid URL")
 
-    else:
-        try:
-            with st.spinner("Processing..."):
-                llm = ChatGroq(
-                    groq_api_key=groq_api_key,
-                    model="llama-3.1-8b-instant"
-                )
+def summarize(llm, docs):
+    summaries = []
 
-                if "youtube.com" in generic_url or "youtu.be" in generic_url:
-                    docs = get_youtube_transcript(generic_url)
-                else:
-                    loader = UnstructuredURLLoader(
-                        urls=[generic_url],
-                        ssl_verify=False,
-                        headers={"User-Agent": "Mozilla/5.0"}
-                    )
-                    docs = loader.load()
+    # Map step (summarize chunks)
+    for doc in docs:
+        chain = prompt | llm
+        result = chain.invoke({"text": doc.page_content})
+        summaries.append(result.content)
 
-                summary = summarize_docs(llm, docs)
+    # Reduce step (final summary)
+    combined = " ".join(summaries)
+    final = (prompt | llm).invoke({"text": combined})
 
-                st.success(summary)
+    return final.content
 
-        except Exception as e:
-            st.exception(e)
+
+# ---------------- Main Logic ----------------
+if st.button("✨ Summarize"):
+
+    if not groq_api_key or not url:
+        st.error("Please provide API key and URL")
+        st.stop()
+
+    if not validators.url(url):
+        st.error("Invalid URL")
+        st.stop()
+
+    try:
+        with st.spinner("Processing..."):
+
+            llm = ChatGroq(
+                groq_api_key=groq_api_key,
+                model="llama-3.1-8b-instant"
+            )
+
+            # Load data
+            if "youtu" in url:
+                docs = load_youtube_data(url)
+            else:
+                docs = load_web_data(url)
+
+            # Split
+            docs = split_docs(docs)
+
+            # Summarize
+            result = summarize(llm, docs)
+
+            st.success(result)
+
+    except Exception as e:
+        st.error("Something went wrong")
+        st.exception(e)
