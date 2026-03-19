@@ -1,4 +1,5 @@
 streamlit
+
 langchain
 langchain-core
 langchain-community
@@ -9,3 +10,5 @@ validators
 youtube_transcript_api
 requests
 beautifulsoup4
+
+pydantic==1.10.13
